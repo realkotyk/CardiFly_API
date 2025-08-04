@@ -1,27 +1,41 @@
-const { Router } = require("express");
+import { Router } from "express";
+import User from "../models/user.js";
 
 const router = Router();
 
 //CRUD - Create, Read, Update, Delete
-router.route("/").get((req, res) => {
-    res.send("Read all users");
+
+// Get and return the full listv of users
+router.route("/").get(async (req, res) => {
+    const users = await User.find();
+    res.status(200).send(users);
 });
 
-router.route("/:id").get((req, res) => {
-    console.log(`Get user with ID: ${req.params.id}`);
-    res.send(`Found user, with ID: ${req.params.id}`);
+router.route("/:id").get(async (req, res) => {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).send(`User, with ID: ${req.params.id}, doesn't exists.`);
+
+    res.status(200).send(user);
 });
 
-router.route("/").post((req, res) => {
-    res.send("Create new User");
+router.route("/").post(async (req, res) => {
+    const existingUser = await User.findOne({ email: req.body.email });
+    if (existingUser) return res.status(409).send(`User, with E-mail: ${req.body.email}, already exists.`);
+
+    const user = await User.create({ email: req.body.email, password: req.body.password });
+    await user.save();
+    res.status(201).send(user);
 });
 
-router.route("/:id").patch((req, res) => {
-    res.send(`Update existing user, with ID: ${req.params.id}`);
+router.route("/:id").patch(async (req, res) => {
+    const updatedUser = await User.findByIdAndUpdate(req.params.id, req.body, { new: true, timestamps: true });
+    if (!updatedUser) return res.status(404).send(`User, with ID: ${req.params.id}, doesn't exists.`);
+    res.status(200).send(updatedUser);
 });
 
-router.route("/:id").delete((req, res) => {
-    res.send(`Delete user, with ID: ${req.params.id}`);
+router.route("/:id").delete(async (req, res) => {
+    const deletedUser = await User.findByIdAndDelete(req.params.id);
+    res.status(200).send(req.params.id);
 });
 
-module.exports = router;
+export default router;

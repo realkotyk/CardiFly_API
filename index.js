@@ -1,17 +1,22 @@
-const express = require("express");
-const morgan = require("morgan");
-require("dotenv").config();
-
-const dbConnection = require("./startup/db");
+import express from "express";
+import morgan from "morgan";
+import dbConnection from "./startup/db.js";
+import usersRoute from "./routes/users.js";
+import dotenv from "dotenv";
+import bodyParser from "body-parser";
 
 const app = express();
 
+dotenv.config();
 app.use(morgan("dev"));
 
 dbConnection();
 
-const usersRoute = require("./routes/users");
+// parse application/x-www-form-urlencoded
+app.use(bodyParser.urlencoded());
 
+// parse application/json
+app.use(bodyParser.json());
 // http://localhost:3000/api/users
 app.use("/api/users", usersRoute);
 
