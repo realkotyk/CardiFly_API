@@ -16,9 +16,8 @@ router.route("/login").post(async (req, res) => {
         throw new Error(`Wrong password!`);
     }
 
-    console.log(`JWT: ${process.env.JWT_PRIVATE}`);
-
     const token = jsonwebtoken.sign({ email: user.email, userId: user._id }, process.env.JWT_PRIVATE, {
+        algorithm: "HS256",
         expiresIn: "1h",
     });
 
