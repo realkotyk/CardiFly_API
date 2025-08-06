@@ -3,6 +3,9 @@ import bcrypt from "bcrypt";
 import User from "../models/user.js";
 import asyncHandler from "express-async-handler";
 import { checkAuth } from "../middlewares/check-auth.js";
+import { upload } from "../middlewares/multerUploader.js";
+import { uploadFileToS3 } from "../middlewares/s3Upload.js";
+import { resizeImage } from "../middlewares/resizeImages.js";
 
 const router = Router();
 
@@ -44,7 +47,8 @@ router.route("/:id").get(
 // @route   POST /api/users
 // @access  Public
 router.route("/").post(
-    checkAuth,
+    // checkAuth,
+    upload.single("userpicUrl"),
     asyncHandler(async (req, res) => {
         try {
             const existingUser = await User.findOne({ email: req.body.email });
@@ -52,9 +56,22 @@ router.route("/").post(
 
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash(req.body.password, salt);
-            const user = await User.create({ email: req.body.email, password: hashedPassword });
-            await user.save();
-            res.status(201).send(user);
+
+            let userpicUrl = null;
+
+            console.log(req.file);
+
+            if (req.file) {
+                const resizedImage = await resizeImage(req.file.buffer);
+                userpicUrl = await uploadFileToS3("users", resizedImage, req.file.originalname, req.file.mimetype);
+            }
+
+            const newUser = await User.create({
+                email: req.body.email,
+                password: hashedPassword,
+                userpicUrl,
+            });
+            res.status(201).send(newUser);
         } catch (err) {
             console.error("Error creating new user:", err);
             res.status(500).json({ error: "Internal server error" });

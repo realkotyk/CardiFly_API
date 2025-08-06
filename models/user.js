@@ -3,9 +3,10 @@ const { Schema } = mongoose;
 // 1. Define Schema – how will be structure document in DB
 const userSchema = new Schema(
     {
-        email: String,
-        password: String,
-        isBanned: Boolean,
+        email: { type: String, require: true, default: "" },
+        password: { type: String, require: true, default: "" },
+        userpicUrl: { type: String, require: false, default: "" },
+        isBanned: { type: Boolean, require: false, default: false },
     },
     { timestamps: true, versionKey: false }
 );
