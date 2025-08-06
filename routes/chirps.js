@@ -3,6 +3,8 @@ import bcrypt from "bcrypt";
 import Chirp from "../models/chirp.js";
 import asyncHandler from "express-async-handler";
 import { checkAuth } from "../middlewares/check-auth.js";
+import { upload } from "../middlewares/multerUploader.js";
+import { uploadFileToS3 } from "../middlewares/s3Upload.js";
 
 const router = Router();
 
@@ -13,7 +15,7 @@ router.route("/").get(
     checkAuth,
     asyncHandler(async (req, res) => {
         try {
-            const chirps = await Chirp.find().select();
+            const chirps = await Chirp.find().populate("author").exec();
             res.status(200).send(chirps);
         } catch (err) {
             console.error("Error fetching chirps:", err);
@@ -23,13 +25,13 @@ router.route("/").get(
 );
 
 // @desc    Get and return the chirp with the specific ID
-// @route   GET /api/users:ID
+// @route   GET /api/chirps:ID
 // @access  Public
 router.route("/:id").get(
     checkAuth,
     asyncHandler(async (req, res) => {
         try {
-            const chirp = await Chirp.findById(req.params.id).select();
+            const chirp = await Chirp.findById(req.params.id).populate("author", "_id email").exec();
             if (!chirp) return res.status(404).send(`Chirp, with ID: ${req.params.id}, doesn't exists.`);
 
             res.status(200).send(chirp);
@@ -45,13 +47,28 @@ router.route("/:id").get(
 // @access  Public
 router.route("/").post(
     checkAuth,
+    upload.single("pictureUrl"),
     asyncHandler(async (req, res) => {
         try {
-            const existingChirp = await Chirp.findOne({ email: req.body.email });
-            if (existingChirp) return res.status(409).send(`Chirp, with E-mail: ${req.body.email}, already exists.`);
+            let pictureUrl = null;
+
+            if (req.file) {
+                pictureUrl = await uploadFileToS3("chirps", req.file.buffer, req.file.originalname, req.file.mimetype);
+            }
+            const data = {
+                author: req.body.author,
+                textBody: req.body.textBody,
+                likesCount: req.body.likesCount,
+                dislikesCount: req.body.dislikesCount,
+                isPosted: req.body.isPosted,
+                pictureUrl,
+            };
+            const chirp = await Chirp.create(data);
+            chirp.save();
+            res.status(201).send(chirp);
         } catch (err) {
-            console.error("Error creating new user:", err);
-            res.status(500).json({ error: "Internal server error" });
+            console.error("Error creating new user:", err.message);
+            res.status(500).json({ error: `Internal server error: ${err.message}` });
         }
     })
 );
@@ -63,7 +80,10 @@ router.route("/:id").patch(
     checkAuth,
     asyncHandler(async (req, res) => {
         try {
-            const updatedChirp = await Chirp.findByIdAndUpdate(req.params.id, req.body, { new: true, timestamps: true });
+            const updatedChirp = await Chirp.findByIdAndUpdate(req.params.id, req.body, {
+                new: true,
+                timestamps: true,
+            });
             if (!updatedChirp) return res.status(404).send(`Chirp, with ID: ${req.params.id}, doesn't exists.`);
             res.status(200).send(updatedChirp);
         } catch (err) {
