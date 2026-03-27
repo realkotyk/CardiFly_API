@@ -1,42 +1,61 @@
 import { Router } from "express";
-import bcrypt from "bcrypt";
-import jsonwebtoken from "jsonwebtoken";
-import asyncHandler from "express-async-handler";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import User from "../models/user.js";
 
 const router = Router();
 
-router.route("/login").post(
-    asyncHandler(async (req, res) => {
-        const { email, password } = req.body;
+// @desc    Register a new user
+// @route   POST /api/auth/register
+// @access  Public
+router.post("/register", async (req, res) => {
+    const { username, email, password } = req.body;
 
-        if (!email || !password) {
-            return res.status(400).json({ error: "Email and password are required." });
-        }
+    if (!username || !email || !password) {
+        return res.status(400).json({ error: "username, email and password are required." });
+    }
 
-        const user = await User.findOne({ email });
-        if (!user) {
-            return res.status(401).json({ error: "Invalid email or password." });
-        }
+    if (User.findByEmail(email)) {
+        return res.status(409).json({ error: "Email already in use." });
+    }
 
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
-            return res.status(401).json({ error: "Invalid email or password." });
-        }
+    if (User.findByUsername(username)) {
+        return res.status(409).json({ error: "Username already taken." });
+    }
 
-        const token = jsonwebtoken.sign(
-            { email: user.email, userId: user._id },
-            process.env.JWT_PRIVATE,
-            { algorithm: "HS256", expiresIn: "7d" }
-        );
+    const password_hash = await bcrypt.hash(password, 10);
+    const user = User.create({ username, email, password_hash });
 
-        res.status(200).json({
-            message: "Authentication completed!",
-            token,
-            userId: user._id,
-            email: user.email,
-        });
-    })
-);
+    res.status(201).json(user);
+});
+
+// @desc    Login
+// @route   POST /api/auth/login
+// @access  Public
+router.post("/login", async (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ error: "username and password are required." });
+    }
+
+    const user = User.findByUsername(username);
+    if (!user) {
+        return res.status(401).json({ error: "Invalid credentials." });
+    }
+
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+        return res.status(401).json({ error: "Invalid credentials." });
+    }
+
+    const token = jwt.sign(
+        { userId: user.id, username: user.username },
+        process.env.JWT_SECRET,
+        { algorithm: "HS256", expiresIn: "24h" }
+    );
+
+    res.status(200).json({ token });
+});
 
 export default router;

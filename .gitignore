@@ -140,3 +140,8 @@ vite.config.ts.timestamp-*
 
 #OSX diles
 .DS_Store
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal

@@ -4,7 +4,9 @@
     "main": "index.js",
     "scripts": {
         "test": "echo \"Error: no test specified\" && exit 1",
-        "dev": "nodemon index.js"
+        "start": "node index.js",
+        "dev": "nodemon index.js",
+        "start:prod": "NODE_ENV=production node index.js"
     },
     "type": "module",
     "keywords": [
@@ -16,20 +18,15 @@
     "license": "ISC",
     "description": "API for CardiFly",
     "dependencies": {
-        "@aws-sdk/client-s3": "^3.859.0",
-        "bcrypt": "^6.0.0",
+        "bcryptjs": "^3.0.3",
+        "better-sqlite3": "^12.8.0",
         "cors": "^2.8.6",
         "dotenv": "^17.2.1",
         "express": "^5.1.0",
-        "express-async-handler": "^1.2.0",
         "express-rate-limit": "^8.3.1",
         "helmet": "^8.1.0",
         "jsonwebtoken": "^9.0.2",
-        "mongodb": "^6.18.0",
-        "mongoose": "^8.17.0",
-        "morgan": "^1.10.1",
-        "multer": "^2.0.2",
-        "sharp": "^0.34.3"
+        "morgan": "^1.10.1"
     },
     "devDependencies": {
         "nodemon": "^3.1.10"
