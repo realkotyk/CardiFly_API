@@ -1,15 +1,79 @@
-import mongoose from "mongoose";
-const { Schema } = mongoose;
-// 1. Define Schema – how will be structure document in DB
-const userSchema = new Schema(
-    {
-        email: String,
-        password: String,
-        isBanned: Boolean,
-    },
-    { timestamps: true, versionKey: false }
-);
+import db from "../startup/db.js";
 
-// 2. Ceate and export the Model
-const User = mongoose.model("User", userSchema);
+const User = {
+    findByEmail(email) {
+        return db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+    },
+
+    findByUsername(username) {
+        return db.prepare("SELECT * FROM users WHERE username = ?").get(username);
+    },
+
+    findById(id) {
+        return db.prepare(
+            "SELECT id, username, email, avatar_url, bio, created_at FROM users WHERE id = ?"
+        ).get(id);
+    },
+
+    findByIdOrUsername(param) {
+        const col = /^\d+$/.test(String(param)) ? "id" : "username";
+        return db.prepare(`
+            SELECT u.id, u.username, u.email, u.avatar_url, u.bio, u.created_at,
+                   (SELECT COUNT(*) FROM follows WHERE following_id = u.id) AS followersCount,
+                   (SELECT COUNT(*) FROM follows WHERE follower_id = u.id) AS followingCount,
+                   (SELECT COUNT(*) FROM posts WHERE user_id = u.id) AS chirpCount
+            FROM users u WHERE u.${col} = ?
+        `).get(param);
+    },
+
+    create({ username, email, password_hash }) {
+        const result = db.prepare(
+            "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)"
+        ).run(username, email, password_hash);
+        return this.findById(result.lastInsertRowid);
+    },
+
+    update(id, { avatar_url, bio }) {
+        db.prepare(
+            "UPDATE users SET avatar_url = COALESCE(?, avatar_url), bio = COALESCE(?, bio) WHERE id = ?"
+        ).run(avatar_url ?? null, bio ?? null, id);
+        return this.findById(id);
+    },
+
+    // Follow toggle: returns { action: 'followed'|'unfollowed' }
+    toggleFollow(follower_id, following_id) {
+        const existing = db.prepare(
+            "SELECT id FROM follows WHERE follower_id = ? AND following_id = ?"
+        ).get(follower_id, following_id);
+
+        if (existing) {
+            db.prepare("DELETE FROM follows WHERE follower_id = ? AND following_id = ?").run(follower_id, following_id);
+            return { action: "unfollowed" };
+        }
+
+        db.prepare("INSERT INTO follows (follower_id, following_id) VALUES (?, ?)").run(follower_id, following_id);
+        return { action: "followed" };
+    },
+
+    followers(user_id) {
+        return db.prepare(`
+            SELECT u.id, u.username, u.avatar_url
+            FROM follows f
+            JOIN users u ON u.id = f.follower_id
+            WHERE f.following_id = ?
+            ORDER BY f.created_at DESC
+        `).all(user_id);
+    },
+
+    following(user_id) {
+        return db.prepare(`
+            SELECT u.id, u.username, u.avatar_url
+            FROM follows f
+            JOIN users u ON u.id = f.following_id
+            WHERE f.follower_id = ?
+            ORDER BY f.created_at DESC
+        `).all(user_id);
+    },
+};
+
 export default User;

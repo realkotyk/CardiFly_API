@@ -1,28 +1,59 @@
 import express from "express";
 import morgan from "morgan";
-import dbConnection from "./startup/db.js";
+import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import dotenv from "dotenv";
+import "./startup/db.js";
 import authRoute from "./routes/auth.js";
 import usersRoute from "./routes/users.js";
-import dotenv from "dotenv";
-import bodyParser from "body-parser";
+import chirpsRoute from "./routes/chirps.js";
+
+dotenv.config();
 
 const app = express();
 
-dotenv.config();
-app.use(morgan("dev"));
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000')
+  .split(',')
+  .map(o => o.trim());
 
-dbConnection();
+app.use(helmet());
+app.use(cors({
+  origin: allowedOrigins,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+}));
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
-// parse application/x-www-form-urlencoded
-app.use(bodyParser.urlencoded());
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
 
-// parse application/json
-app.use(bodyParser.json());
-app.use("/api/auth", authRoute);
-// http://localhost:3000/api/users
+const postsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+
+app.get("/health", (req, res) => res.status(200).json({ status: "ok" }));
+
+app.use("/api/auth", authLimiter, authRoute);
+app.use("/auth", authLimiter, authRoute);
 app.use("/api/users", usersRoute);
+app.use("/users", usersRoute);
+app.use("/api/chirps", postsLimiter, chirpsRoute);
+app.use("/posts", postsLimiter, chirpsRoute);
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 4000;
 app.listen(port, () => {
     console.log(`CardiFly API listening on port: ${port}`);
 });
