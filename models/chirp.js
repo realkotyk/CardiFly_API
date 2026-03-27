@@ -1,23 +1,26 @@
 import mongoose from "mongoose";
 const { Schema } = mongoose;
 
-// 1. Define Schema – how will be structure document in DB
 const chirpSchema = new Schema(
     {
         parentId: {
             type: Schema.Types.ObjectId,
-            require: false,
+            ref: "Chirp",
+            default: null,
         },
-        author: { type: Schema.Types.ObjectId, require: true, ref: "User" },
-        textBody: { type: String, require: true, minlength: 8, maxlength: 120 },
-        likesCount: Number,
-        dislikesCount: Number,
-        isPosted: Boolean,
-        pictureUrl: String,
+        author: { type: Schema.Types.ObjectId, required: true, ref: "User" },
+        textBody: { type: String, required: true, minlength: 1, maxlength: 280 },
+        likesCount: { type: Number, default: 0 },
+        dislikesCount: { type: Number, default: 0 },
+        isPosted: { type: Boolean, default: true },
+        pictureUrl: { type: String, default: null },
     },
     { timestamps: true, versionKey: false }
 );
 
-// 2. Ceate and export the Model
+chirpSchema.index({ author: 1 });
+chirpSchema.index({ parentId: 1 }, { sparse: true });
+chirpSchema.index({ createdAt: -1 });
+
 const Chirp = mongoose.model("Chirp", chirpSchema);
 export default Chirp;

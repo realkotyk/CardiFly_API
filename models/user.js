@@ -1,16 +1,28 @@
 import mongoose from "mongoose";
 const { Schema } = mongoose;
-// 1. Define Schema – how will be structure document in DB
+
 const userSchema = new Schema(
     {
-        email: { type: String, require: true, default: "" },
-        password: { type: String, require: true, default: "" },
-        userpicUrl: { type: String, require: false, default: "" },
-        isBanned: { type: Boolean, require: false, default: false },
+        email: {
+            type: String,
+            required: true,
+            unique: true,
+            lowercase: true,
+            trim: true,
+            match: [/^\S+@\S+\.\S+$/, "Please provide a valid email address."],
+        },
+        password: {
+            type: String,
+            required: true,
+            minlength: [8, "Password must be at least 8 characters."],
+        },
+        userpicUrl: { type: String, default: "" },
+        isBanned: { type: Boolean, default: false },
     },
     { timestamps: true, versionKey: false }
 );
 
-// 2. Ceate and export the Model
+userSchema.index({ email: 1 });
+
 const User = mongoose.model("User", userSchema);
 export default User;
