@@ -14,7 +14,8 @@ const Chirp = {
                    u.id AS user_id, u.username, u.avatar_url,
                    COALESCE(SUM(CASE WHEN r.type = 'like' THEN 1 END), 0) AS likes,
                    COALESCE(SUM(CASE WHEN r.type = 'dislike' THEN 1 END), 0) AS dislikes,
-                   (SELECT COUNT(*) FROM replies WHERE post_id = p.id) AS replies_count
+                   (SELECT COUNT(*) FROM replies WHERE post_id = p.id) AS replies_count,
+                   (SELECT COUNT(*) FROM rechirps WHERE post_id = p.id) AS rechirps_count
             FROM posts p
             JOIN users u ON u.id = p.user_id
             LEFT JOIN reactions r ON r.post_id = p.id
@@ -29,7 +30,8 @@ const Chirp = {
                    u.id AS user_id, u.username, u.avatar_url,
                    COALESCE(SUM(CASE WHEN r.type = 'like' THEN 1 END), 0) AS likes,
                    COALESCE(SUM(CASE WHEN r.type = 'dislike' THEN 1 END), 0) AS dislikes,
-                   (SELECT COUNT(*) FROM replies WHERE post_id = p.id) AS replies_count
+                   (SELECT COUNT(*) FROM replies WHERE post_id = p.id) AS replies_count,
+                   (SELECT COUNT(*) FROM rechirps WHERE post_id = p.id) AS rechirps_count
             FROM posts p
             JOIN users u ON u.id = p.user_id
             LEFT JOIN reactions r ON r.post_id = p.id
@@ -50,7 +52,8 @@ const Chirp = {
                    u.id AS user_id, u.username, u.avatar_url,
                    COALESCE(SUM(CASE WHEN r.type = 'like' THEN 1 END), 0) AS likes,
                    COALESCE(SUM(CASE WHEN r.type = 'dislike' THEN 1 END), 0) AS dislikes,
-                   (SELECT COUNT(*) FROM replies WHERE post_id = p.id) AS replies_count
+                   (SELECT COUNT(*) FROM replies WHERE post_id = p.id) AS replies_count,
+                   (SELECT COUNT(*) FROM rechirps WHERE post_id = p.id) AS rechirps_count
             FROM posts p
             JOIN users u ON u.id = p.user_id
             LEFT JOIN reactions r ON r.post_id = p.id
@@ -66,7 +69,8 @@ const Chirp = {
                    u.id AS user_id, u.username, u.avatar_url,
                    COALESCE(SUM(CASE WHEN r.type = 'like' THEN 1 END), 0) AS likes,
                    COALESCE(SUM(CASE WHEN r.type = 'dislike' THEN 1 END), 0) AS dislikes,
-                   (SELECT COUNT(*) FROM replies WHERE post_id = p.id) AS replies_count
+                   (SELECT COUNT(*) FROM replies WHERE post_id = p.id) AS replies_count,
+                   (SELECT COUNT(*) FROM rechirps WHERE post_id = p.id) AS rechirps_count
             FROM posts p
             JOIN users u ON u.id = p.user_id
             LEFT JOIN reactions r ON r.post_id = p.id

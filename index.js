@@ -8,6 +8,8 @@ import "./startup/db.js";
 import authRoute from "./routes/auth.js";
 import usersRoute from "./routes/users.js";
 import chirpsRoute from "./routes/chirps.js";
+import repliesRoute from "./routes/replies.js";
+import notificationsRoute from "./routes/notifications.js";
 
 dotenv.config();
 
@@ -52,6 +54,8 @@ app.use("/api/users", usersRoute);
 app.use("/users", usersRoute);
 app.use("/api/chirps", postsLimiter, chirpsRoute);
 app.use("/posts", postsLimiter, chirpsRoute);
+app.use("/replies", repliesRoute);
+app.use("/notifications", notificationsRoute);
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {

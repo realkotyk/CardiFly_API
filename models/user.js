@@ -40,7 +40,13 @@ const User = {
         return this.findById(id);
     },
 
-    // Follow toggle: returns { action: 'followed'|'unfollowed' }
+    isFollowing(follower_id, following_id) {
+        return !!db.prepare(
+            "SELECT id FROM follows WHERE follower_id = ? AND following_id = ?"
+        ).get(follower_id, following_id);
+    },
+
+    // Follow toggle: returns { isFollowing, followersCount }
     toggleFollow(follower_id, following_id) {
         const existing = db.prepare(
             "SELECT id FROM follows WHERE follower_id = ? AND following_id = ?"
@@ -48,11 +54,15 @@ const User = {
 
         if (existing) {
             db.prepare("DELETE FROM follows WHERE follower_id = ? AND following_id = ?").run(follower_id, following_id);
-            return { action: "unfollowed" };
+        } else {
+            db.prepare("INSERT INTO follows (follower_id, following_id) VALUES (?, ?)").run(follower_id, following_id);
         }
 
-        db.prepare("INSERT INTO follows (follower_id, following_id) VALUES (?, ?)").run(follower_id, following_id);
-        return { action: "followed" };
+        const followersCount = db.prepare(
+            "SELECT COUNT(*) as c FROM follows WHERE following_id = ?"
+        ).get(following_id).c;
+
+        return { isFollowing: !existing, followersCount };
     },
 
     followers(user_id) {

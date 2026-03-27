@@ -61,6 +61,41 @@ db.exec(`
     )
 `);
 
+db.exec(`
+    CREATE TABLE IF NOT EXISTS rechirps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+        UNIQUE(post_id, user_id)
+    )
+`);
+
+db.exec(`
+    CREATE TABLE IF NOT EXISTS reply_reactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        reply_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        type TEXT CHECK(type IN ('like','dislike')) NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(reply_id, user_id),
+        FOREIGN KEY (reply_id) REFERENCES replies(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+`);
+
+db.exec(`
+    CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT NOT NULL CHECK(type IN ('like', 'dislike', 'follow', 'reply', 'rechirp')),
+        post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+        read INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    )
+`);
+
 console.log(`SQLite connected: ${DB_PATH}`);
 
 export default db;

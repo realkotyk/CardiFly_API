@@ -1,4 +1,5 @@
 import { Router } from "express";
+import jwt from "jsonwebtoken";
 import Chirp from "../models/chirp.js";
 import { auth } from "../middlewares/auth.js";
 import db from "../startup/db.js";
@@ -13,6 +14,37 @@ router.get("/", (req, res) => {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const offset = (page - 1) * limit;
     const chirps = Chirp.findAll({ limit, offset });
+
+    let userId = null;
+    const header = req.headers.authorization;
+    if (header?.startsWith("Bearer ")) {
+        try {
+            const decoded = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET);
+            userId = decoded.userId;
+        } catch {}
+    }
+
+    chirps.forEach(c => {
+        if (userId) {
+            const reaction = db.prepare(
+                "SELECT type FROM reactions WHERE post_id = ? AND user_id = ?"
+            ).get(c.id, userId);
+            c.userLiked = reaction?.type === "like";
+            c.userDisliked = reaction?.type === "dislike";
+            c.userRechirped = !!db.prepare(
+                "SELECT id FROM rechirps WHERE post_id = ? AND user_id = ?"
+            ).get(c.id, userId);
+            c.userReplied = !!db.prepare(
+                "SELECT id FROM replies WHERE post_id = ? AND user_id = ?"
+            ).get(c.id, userId);
+        } else {
+            c.userLiked = false;
+            c.userDisliked = false;
+            c.userRechirped = false;
+            c.userReplied = false;
+        }
+    });
+
     res.status(200).json({ page, limit, chirps });
 });
 
@@ -24,6 +56,19 @@ router.get("/following", auth, (req, res) => {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const offset = (page - 1) * limit;
     const chirps = Chirp.findFollowingFeed(req.user.userId, { limit, offset });
+    chirps.forEach(c => {
+        const reaction = db.prepare(
+            "SELECT type FROM reactions WHERE post_id = ? AND user_id = ?"
+        ).get(c.id, req.user.userId);
+        c.userLiked = reaction?.type === "like";
+        c.userDisliked = reaction?.type === "dislike";
+        c.userRechirped = !!db.prepare(
+            "SELECT id FROM rechirps WHERE post_id = ? AND user_id = ?"
+        ).get(c.id, req.user.userId);
+        c.userReplied = !!db.prepare(
+            "SELECT id FROM replies WHERE post_id = ? AND user_id = ?"
+        ).get(c.id, req.user.userId);
+    });
     res.status(200).json({ page, limit, chirps });
 });
 
@@ -103,6 +148,10 @@ router.post("/:id/reply", auth, (req, res) => {
     const reply = db.prepare(
         "SELECT r.id, r.content, r.created_at, u.username, u.avatar_url FROM replies r JOIN users u ON u.id = r.user_id WHERE r.id = ?"
     ).get(result.lastInsertRowid);
+    if (chirp.user_id !== req.user.userId) {
+        db.prepare("INSERT INTO notifications (recipient_id, actor_id, type, post_id) VALUES (?, ?, 'reply', ?)")
+            .run(chirp.user_id, req.user.userId, chirp.id);
+    }
     res.status(201).json(reply);
 });
 
@@ -112,10 +161,66 @@ router.post("/:id/reply", auth, (req, res) => {
 router.get("/:id/replies", (req, res) => {
     const chirp = Chirp.findById(req.params.id);
     if (!chirp) return res.status(404).json({ error: "Chirp not found." });
-    const replies = db.prepare(
-        "SELECT r.id, r.content, r.created_at, u.username, u.avatar_url FROM replies r JOIN users u ON u.id = r.user_id WHERE r.post_id = ? ORDER BY r.created_at ASC"
-    ).all(req.params.id);
+    const replies = db.prepare(`
+        SELECT r.id, r.content, r.created_at, u.username, u.avatar_url,
+            (SELECT COUNT(*) FROM reply_reactions WHERE reply_id = r.id AND type = 'like') as likes,
+            (SELECT COUNT(*) FROM reply_reactions WHERE reply_id = r.id AND type = 'dislike') as dislikes
+        FROM replies r
+        JOIN users u ON u.id = r.user_id
+        WHERE r.post_id = ?
+        ORDER BY r.created_at ASC
+    `).all(req.params.id);
+
+    let userId = null;
+    const header = req.headers.authorization;
+    if (header && header.startsWith("Bearer ")) {
+        try {
+            const decoded = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET);
+            userId = decoded.userId;
+        } catch { /* invalid token — treat as unauthenticated */ }
+    }
+
+    if (userId) {
+        replies.forEach(r => {
+            const reaction = db.prepare(
+                "SELECT type FROM reply_reactions WHERE reply_id = ? AND user_id = ?"
+            ).get(r.id, userId);
+            r.userLiked = reaction?.type === "like";
+            r.userDisliked = reaction?.type === "dislike";
+        });
+    }
+
     res.status(200).json(replies);
+});
+
+// @desc    Toggle rechirp
+// @route   POST /api/chirps/:id/rechirp
+// @access  Private
+router.post("/:id/rechirp", auth, (req, res) => {
+    const chirp = Chirp.findById(req.params.id);
+    if (!chirp) return res.status(404).json({ error: "Chirp not found." });
+
+    const existing = db.prepare(
+        "SELECT id FROM rechirps WHERE post_id = ? AND user_id = ?"
+    ).get(req.params.id, req.user.userId);
+
+    if (existing) {
+        db.prepare("DELETE FROM rechirps WHERE post_id = ? AND user_id = ?")
+            .run(req.params.id, req.user.userId);
+    } else {
+        db.prepare("INSERT INTO rechirps (post_id, user_id) VALUES (?, ?)")
+            .run(req.params.id, req.user.userId);
+        if (chirp.user_id !== req.user.userId) {
+            db.prepare("INSERT INTO notifications (recipient_id, actor_id, type, post_id) VALUES (?, ?, 'rechirp', ?)")
+                .run(chirp.user_id, req.user.userId, chirp.id);
+        }
+    }
+
+    const count = db.prepare(
+        "SELECT COUNT(*) as c FROM rechirps WHERE post_id = ?"
+    ).get(req.params.id).c;
+
+    res.status(200).json({ rechirped: !existing, count });
 });
 
 // @desc    Toggle like
@@ -125,6 +230,11 @@ router.post("/:id/like", auth, (req, res) => {
     const chirp = Chirp.findById(req.params.id);
     if (!chirp) return res.status(404).json({ error: "Chirp not found." });
     const result = Chirp.toggleReaction(req.user.userId, req.params.id, "like");
+    const reactionNow = db.prepare("SELECT id FROM reactions WHERE post_id = ? AND user_id = ? AND type = 'like'").get(req.params.id, req.user.userId);
+    if (reactionNow && chirp.user_id !== req.user.userId) {
+        db.prepare("INSERT INTO notifications (recipient_id, actor_id, type, post_id) VALUES (?, ?, 'like', ?)")
+            .run(chirp.user_id, req.user.userId, chirp.id);
+    }
     const updated = Chirp.findById(req.params.id);
     res.status(200).json({ ...result, likes: updated.likes, dislikes: updated.dislikes });
 });
@@ -136,6 +246,11 @@ router.post("/:id/dislike", auth, (req, res) => {
     const chirp = Chirp.findById(req.params.id);
     if (!chirp) return res.status(404).json({ error: "Chirp not found." });
     const result = Chirp.toggleReaction(req.user.userId, req.params.id, "dislike");
+    const reactionNow = db.prepare("SELECT id FROM reactions WHERE post_id = ? AND user_id = ? AND type = 'dislike'").get(req.params.id, req.user.userId);
+    if (reactionNow && chirp.user_id !== req.user.userId) {
+        db.prepare("INSERT INTO notifications (recipient_id, actor_id, type, post_id) VALUES (?, ?, 'dislike', ?)")
+            .run(chirp.user_id, req.user.userId, chirp.id);
+    }
     const updated = Chirp.findById(req.params.id);
     res.status(200).json({ ...result, likes: updated.likes, dislikes: updated.dislikes });
 });
