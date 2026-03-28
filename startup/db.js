@@ -93,6 +93,47 @@ try {
     `);
 
     db.exec(`
+        CREATE TABLE IF NOT EXISTS polls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL UNIQUE REFERENCES posts(id) ON DELETE CASCADE,
+            duration_hours INTEGER NOT NULL DEFAULT 24,
+            ends_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        )
+    `);
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS poll_options (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            poll_id INTEGER NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+            label TEXT NOT NULL CHECK(length(label) <= 80),
+            position INTEGER NOT NULL DEFAULT 0
+        )
+    `);
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS poll_votes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            poll_id INTEGER NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+            option_id INTEGER NOT NULL REFERENCES poll_options(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            UNIQUE(poll_id, user_id)
+        )
+    `);
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS post_media (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+            url TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'image',
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        )
+    `);
+
+    db.exec(`
         CREATE TABLE IF NOT EXISTS notifications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -126,6 +167,20 @@ try {
             `);
         }
     } catch { /* table already has 'mention' or is freshly created */ }
+
+    // Migration: add location column to posts
+    try {
+        db.exec("ALTER TABLE posts ADD COLUMN location TEXT DEFAULT NULL");
+    } catch { /* column already exists */ }
+
+    // Migration: add scheduling columns to posts
+    try {
+        db.exec("ALTER TABLE posts ADD COLUMN scheduled_at TEXT DEFAULT NULL");
+    } catch { /* column already exists */ }
+
+    try {
+        db.exec("ALTER TABLE posts ADD COLUMN is_published INTEGER NOT NULL DEFAULT 1");
+    } catch { /* column already exists */ }
 } catch (err) {
     console.error("Failed to initialize database schema:", err.message);
     process.exit(1);

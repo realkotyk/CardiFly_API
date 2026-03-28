@@ -6,6 +6,9 @@ import morgan from "morgan";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
 import "./startup/db.js";
 import authRoute from "./routes/auth.js";
 import usersRoute from "./routes/users.js";
@@ -13,6 +16,8 @@ import chirpsRoute from "./routes/chirps.js";
 import repliesRoute from "./routes/replies.js";
 import notificationsRoute from "./routes/notifications.js";
 import hashtagsRoute from "./routes/hashtags.js";
+import uploadRoute from "./routes/upload.js";
+import { startScheduler } from "./scheduler.js";
 
 const app = express();
 
@@ -23,13 +28,18 @@ const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000')
 app.use(helmet());
 app.use(cors({
   origin: allowedOrigins,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
 }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const uploadsDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
+app.use("/uploads", express.static(uploadsDir));
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -58,6 +68,8 @@ app.use("/posts", postsLimiter, chirpsRoute);
 app.use("/replies", repliesRoute);
 app.use("/notifications", notificationsRoute);
 app.use("/hashtags", hashtagsRoute);
+app.use("/api/upload", uploadRoute);
+app.use("/upload", uploadRoute);
 
 // Global error handler
 app.use((err, req, res, _next) => {
@@ -72,6 +84,8 @@ const port = process.env.PORT || 4000;
 const server = app.listen(port, () => {
     console.log(`CardiFly API listening on port: ${port}`);
 });
+
+startScheduler();
 
 // Graceful shutdown
 function shutdown(signal) {

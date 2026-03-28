@@ -22,6 +22,18 @@ function createMentionNotifications(content, actorId, postId) {
     }
 }
 
+// Helper: extract userId from optional Bearer token
+function optionalUserId(req) {
+    const header = req.headers.authorization;
+    if (header?.startsWith("Bearer ")) {
+        try {
+            const decoded = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET);
+            return decoded.userId;
+        } catch {}
+    }
+    return null;
+}
+
 // @desc    Get paginated feed
 // @route   GET /api/chirps?page=1&limit=20
 // @access  Public
@@ -31,14 +43,10 @@ router.get("/", (req, res) => {
     const offset = (page - 1) * limit;
     const chirps = Chirp.findAll({ limit, offset });
 
-    let userId = null;
-    const header = req.headers.authorization;
-    if (header?.startsWith("Bearer ")) {
-        try {
-            const decoded = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET);
-            userId = decoded.userId;
-        } catch {}
-    }
+    const userId = optionalUserId(req);
+
+    Chirp.attachPollData(chirps, userId);
+    Chirp.attachMedia(chirps);
 
     chirps.forEach(c => {
         if (userId) {
@@ -72,6 +80,10 @@ router.get("/following", auth, (req, res) => {
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const offset = (page - 1) * limit;
     const chirps = Chirp.findFollowingFeed(req.user.userId, { limit, offset });
+
+    Chirp.attachPollData(chirps, req.user.userId);
+    Chirp.attachMedia(chirps);
+
     chirps.forEach(c => {
         const reaction = db.prepare(
             "SELECT type FROM reactions WHERE post_id = ? AND user_id = ?"
@@ -88,29 +100,97 @@ router.get("/following", auth, (req, res) => {
     res.status(200).json({ page, limit, chirps });
 });
 
+// @desc    Get user's scheduled posts
+// @route   GET /api/chirps/scheduled
+// @access  Private
+router.get("/scheduled", auth, (req, res) => {
+    const chirps = Chirp.findScheduled(req.user.userId);
+    Chirp.attachPollData(chirps, req.user.userId);
+    Chirp.attachMedia(chirps);
+    res.status(200).json(chirps);
+});
+
 // @desc    Get single chirp
 // @route   GET /api/chirps/:id
 // @access  Public
 router.get("/:id", (req, res) => {
     const chirp = Chirp.findById(req.params.id);
     if (!chirp) return res.status(404).json({ error: "Chirp not found." });
-    res.status(200).json(chirp);
+
+    const userId = optionalUserId(req);
+    const chirps = [chirp];
+    Chirp.attachPollData(chirps, userId);
+    Chirp.attachMedia(chirps);
+
+    res.status(200).json(chirps[0]);
 });
 
 // @desc    Create a chirp
 // @route   POST /api/chirps
 // @access  Private
 router.post("/", auth, (req, res) => {
-    const { content } = req.body;
-    if (!content || content.trim().length === 0) {
-        return res.status(400).json({ error: "content is required." });
+    const { content, location, poll, media_urls, gif_url, scheduled_at } = req.body;
+
+    const hasContent = content && content.trim().length > 0;
+    const hasMedia = (Array.isArray(media_urls) && media_urls.length > 0) || gif_url;
+    const hasPoll = poll && Array.isArray(poll.options) && poll.options.filter(o => o && o.trim()).length >= 2;
+
+    if (!hasContent && !hasMedia && !hasPoll) {
+        return res.status(400).json({ error: "content, media, poll, or gif is required." });
     }
-    if (content.length > 280) {
+    if (content && content.length > 280) {
         return res.status(400).json({ error: "content must be 280 characters or less." });
     }
-    const chirp = Chirp.create({ user_id: req.user.userId, content: content.trim() });
-    createMentionNotifications(content, req.user.userId, chirp.id);
-    res.status(201).json(chirp);
+
+    const chirp = Chirp.create({
+        user_id: req.user.userId,
+        content: content ? content.trim() : "",
+        location: location || null,
+        scheduled_at: scheduled_at || null,
+    });
+
+    // Create poll if provided
+    if (poll && Array.isArray(poll.options) && poll.options.length >= 2) {
+        const durationHours = poll.duration_hours || 24;
+        const endsAt = new Date(Date.now() + durationHours * 60 * 60 * 1000).toISOString();
+        const pollResult = db.prepare(
+            "INSERT INTO polls (post_id, duration_hours, ends_at) VALUES (?, ?, ?)"
+        ).run(chirp.id, durationHours, endsAt);
+        const insertOption = db.prepare(
+            "INSERT INTO poll_options (poll_id, label, position) VALUES (?, ?, ?)"
+        );
+        poll.options.forEach((label, i) => {
+            insertOption.run(pollResult.lastInsertRowid, label, i);
+        });
+    }
+
+    // Insert media URLs
+    if (Array.isArray(media_urls) && media_urls.length > 0) {
+        const insertMedia = db.prepare(
+            "INSERT INTO post_media (post_id, url, type, position) VALUES (?, ?, 'image', ?)"
+        );
+        media_urls.forEach((url, i) => {
+            insertMedia.run(chirp.id, url, i);
+        });
+    }
+
+    // Insert GIF
+    if (gif_url) {
+        db.prepare(
+            "INSERT INTO post_media (post_id, url, type, position) VALUES (?, ?, 'gif', 0)"
+        ).run(chirp.id, gif_url);
+    }
+
+    if (content) {
+        createMentionNotifications(content, req.user.userId, chirp.id);
+    }
+
+    // Re-fetch with attachments
+    const result = [Chirp.findById(chirp.id)];
+    Chirp.attachPollData(result, req.user.userId);
+    Chirp.attachMedia(result);
+
+    res.status(201).json(result[0]);
 });
 
 // @desc    Update a chirp (author only)
@@ -144,6 +224,52 @@ router.delete("/:id", auth, (req, res) => {
     }
     Chirp.delete(req.params.id);
     res.status(200).json({ message: "Chirp deleted." });
+});
+
+// @desc    Vote on a poll option
+// @route   POST /api/chirps/:id/vote
+// @access  Private
+router.post("/:id/vote", auth, (req, res) => {
+    const { option_id } = req.body;
+    if (!option_id) {
+        return res.status(400).json({ error: "option_id is required." });
+    }
+
+    const poll = db.prepare("SELECT * FROM polls WHERE post_id = ?").get(req.params.id);
+    if (!poll) {
+        return res.status(404).json({ error: "Poll not found." });
+    }
+
+    // Check poll not expired
+    if (new Date(poll.ends_at) < new Date()) {
+        return res.status(400).json({ error: "Poll has ended." });
+    }
+
+    // Check option belongs to this poll
+    const option = db.prepare("SELECT * FROM poll_options WHERE id = ? AND poll_id = ?").get(option_id, poll.id);
+    if (!option) {
+        return res.status(400).json({ error: "Invalid option for this poll." });
+    }
+
+    // Check user hasn't already voted
+    const existing = db.prepare("SELECT * FROM poll_votes WHERE poll_id = ? AND user_id = ?").get(poll.id, req.user.userId);
+    if (existing) {
+        return res.status(400).json({ error: "You have already voted on this poll." });
+    }
+
+    db.prepare("INSERT INTO poll_votes (poll_id, option_id, user_id) VALUES (?, ?, ?)").run(poll.id, option_id, req.user.userId);
+
+    // Return updated poll data
+    const options = db.prepare(`
+        SELECT po.id, po.label, po.position,
+               (SELECT COUNT(*) FROM poll_votes WHERE option_id = po.id) AS votes
+        FROM poll_options po
+        WHERE po.poll_id = ?
+        ORDER BY po.position
+    `).all(poll.id);
+    const total_votes = options.reduce((sum, o) => sum + o.votes, 0);
+
+    res.status(200).json({ poll_id: poll.id, options, total_votes, user_vote: option_id });
 });
 
 // @desc    Post a reply to a chirp
@@ -189,14 +315,7 @@ router.get("/:id/replies", (req, res) => {
         ORDER BY r.created_at ASC
     `).all(req.params.id);
 
-    let userId = null;
-    const header = req.headers.authorization;
-    if (header && header.startsWith("Bearer ")) {
-        try {
-            const decoded = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET);
-            userId = decoded.userId;
-        } catch { /* invalid token — treat as unauthenticated */ }
-    }
+    const userId = optionalUserId(req);
 
     if (userId) {
         replies.forEach(r => {
