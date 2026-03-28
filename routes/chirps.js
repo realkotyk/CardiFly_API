@@ -6,6 +6,22 @@ import db from "../startup/db.js";
 
 const router = Router();
 
+// Helper: extract @mentioned usernames from content and create 'mention' notifications
+function createMentionNotifications(content, actorId, postId) {
+    const matches = content.match(/@(\w+)/g);
+    if (!matches) return;
+    const usernames = [...new Set(matches.map(m => m.slice(1)))];
+    const insertNotif = db.prepare(
+        "INSERT INTO notifications (recipient_id, actor_id, type, post_id) VALUES (?, ?, 'mention', ?)"
+    );
+    for (const username of usernames) {
+        const user = db.prepare("SELECT id FROM users WHERE username = ? COLLATE NOCASE").get(username);
+        if (user && user.id !== actorId) {
+            insertNotif.run(user.id, actorId, postId);
+        }
+    }
+}
+
 // @desc    Get paginated feed
 // @route   GET /api/chirps?page=1&limit=20
 // @access  Public
@@ -93,6 +109,7 @@ router.post("/", auth, (req, res) => {
         return res.status(400).json({ error: "content must be 280 characters or less." });
     }
     const chirp = Chirp.create({ user_id: req.user.userId, content: content.trim() });
+    createMentionNotifications(content, req.user.userId, chirp.id);
     res.status(201).json(chirp);
 });
 
@@ -152,6 +169,7 @@ router.post("/:id/reply", auth, (req, res) => {
         db.prepare("INSERT INTO notifications (recipient_id, actor_id, type, post_id) VALUES (?, ?, 'reply', ?)")
             .run(chirp.user_id, req.user.userId, chirp.id);
     }
+    createMentionNotifications(content, req.user.userId, chirp.id);
     res.status(201).json(reply);
 });
 

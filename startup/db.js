@@ -97,12 +97,35 @@ try {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            type TEXT NOT NULL CHECK(type IN ('like', 'dislike', 'follow', 'reply', 'rechirp')),
+            type TEXT NOT NULL CHECK(type IN ('like', 'dislike', 'follow', 'reply', 'rechirp', 'mention')),
             post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
             read INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         )
     `);
+
+    // Migration: add 'mention' to existing notifications CHECK constraint
+    try {
+        const tableInfo = db.prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'"
+        ).get();
+        if (tableInfo && !tableInfo.sql.includes("'mention'")) {
+            db.exec(`
+                ALTER TABLE notifications RENAME TO notifications_old;
+                CREATE TABLE notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    type TEXT NOT NULL CHECK(type IN ('like', 'dislike', 'follow', 'reply', 'rechirp', 'mention')),
+                    post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE,
+                    read INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                );
+                INSERT INTO notifications SELECT * FROM notifications_old;
+                DROP TABLE notifications_old;
+            `);
+        }
+    } catch { /* table already has 'mention' or is freshly created */ }
 } catch (err) {
     console.error("Failed to initialize database schema:", err.message);
     process.exit(1);

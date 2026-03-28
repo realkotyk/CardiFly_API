@@ -7,6 +7,22 @@ import db from "../startup/db.js";
 
 const router = Router();
 
+// @desc    Search users by username prefix (for @mention autocomplete)
+// @route   GET /api/users/search?q=partial
+// @access  Public
+router.get("/search", (req, res) => {
+    const q = (req.query.q || "").trim();
+    if (!q) return res.status(200).json([]);
+    const users = db.prepare(`
+        SELECT id, username, avatar_url
+        FROM users
+        WHERE username LIKE ? COLLATE NOCASE
+        ORDER BY username ASC
+        LIMIT 10
+    `).all(`${q}%`);
+    res.status(200).json(users);
+});
+
 // @desc    Get 3 most active users not yet followed by the requester
 // @route   GET /api/users/suggestions
 // @access  Public (auth optional)
