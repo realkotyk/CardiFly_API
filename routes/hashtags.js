@@ -1,19 +1,9 @@
 import { Router } from "express";
-import jwt from "jsonwebtoken";
 import Post from "../models/Post.js";
+import { optionalUserId } from '../helpers/utils.js';
 import { attachExtras, attachUserState } from "../helpers/chirpHelpers.js";
 
 const router = Router();
-
-function optionalUserId(req) {
-    const header = req.headers.authorization;
-    if (header?.startsWith("Bearer ")) {
-        try {
-            return jwt.verify(header.split(" ")[1], process.env.JWT_SECRET).userId;
-        } catch {}
-    }
-    return null;
-}
 
 // GET /hashtags/trending?limit=10
 router.get("/trending", async (req, res) => {

@@ -1,6 +1,6 @@
 import { Router } from "express";
-import jwt from "jsonwebtoken";
 import Post from "../models/Post.js";
+import { optionalUserId, parsePagination } from '../helpers/utils.js';
 import User from "../models/User.js";
 import Reaction from "../models/Reaction.js";
 import Rechirp from "../models/Rechirp.js";
@@ -16,16 +16,6 @@ import { attachExtras, attachUserState } from "../helpers/chirpHelpers.js";
 import { getPromotedChirps } from "./promotions.js";
 
 const router = Router();
-
-function optionalUserId(req) {
-    const header = req.headers.authorization;
-    if (header?.startsWith("Bearer ")) {
-        try {
-            return jwt.verify(header.split(" ")[1], process.env.JWT_SECRET).userId;
-        } catch {}
-    }
-    return null;
-}
 
 async function createMentionNotifications(content, actorId, postId) {
     const matches = content.match(/@(\w+)/g);
@@ -58,9 +48,7 @@ async function postToChirp(post) {
 
 // GET / — paginated feed with promoted chirps interleaved
 router.get("/", async (req, res) => {
-    const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-    const page = Math.max(parseInt(req.query.page) || 1, 1);
-    const offset = (page - 1) * limit;
+    const { page, limit, skip: offset } = parsePagination(req.query);
     const userId = optionalUserId(req);
 
     const posts = await Post.find({ is_published: true })

@@ -1,6 +1,6 @@
 import { Router } from "express";
-import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
+import { optionalUserId } from '../helpers/utils.js';
 import User from "../models/User.js";
 import Post from "../models/Post.js";
 import Reaction from "../models/Reaction.js";
@@ -15,17 +15,6 @@ import { auth } from "../middlewares/auth.js";
 import { attachExtras, attachUserState } from "../helpers/chirpHelpers.js";
 
 const router = Router();
-
-function optionalUserId(req) {
-    const header = req.headers.authorization;
-    if (header?.startsWith("Bearer ")) {
-        try {
-            const decoded = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET);
-            return decoded.userId;
-        } catch {}
-    }
-    return null;
-}
 
 // GET /api/users/search?q=partial
 router.get("/search", async (req, res) => {
@@ -214,9 +203,36 @@ router.get("/:id/replies", async (req, res) => {
         .populate({ path: 'post_id', populate: { path: 'user_id', select: 'username' } })
         .lean();
 
-    const result = await Promise.all(replies.map(async (r) => {
-        const likes = await ReplyReaction.countDocuments({ reply_id: r._id, type: 'like' });
-        const dislikes = await ReplyReaction.countDocuments({ reply_id: r._id, type: 'dislike' });
+    // Batch count reactions for all reply IDs at once
+    const replyIds = replies.map(r => r._id);
+    const reactionCounts = await ReplyReaction.aggregate([
+        { $match: { reply_id: { $in: replyIds } } },
+        { $group: { _id: { reply_id: '$reply_id', type: '$type' }, count: { $sum: 1 } } }
+    ]);
+
+    // Build lookup map
+    const countMap = {};
+    for (const r of reactionCounts) {
+        const key = r._id.reply_id.toString();
+        if (!countMap[key]) countMap[key] = { likes: 0, dislikes: 0 };
+        countMap[key][r._id.type === 'like' ? 'likes' : 'dislikes'] = r.count;
+    }
+
+    // Also batch check user's own reactions
+    const userId = optionalUserId(req);
+    let userReactionMap = {};
+    if (userId) {
+        const userReactions = await ReplyReaction.find({
+            reply_id: { $in: replyIds },
+            user_id: userId
+        });
+        for (const ur of userReactions) {
+            userReactionMap[ur.reply_id.toString()] = ur.type;
+        }
+    }
+
+    const result = replies.map(r => {
+        const counts = countMap[r._id.toString()] || { likes: 0, dislikes: 0 };
         return {
             id: r._id,
             content: r.content,
@@ -227,10 +243,12 @@ router.get("/:id/replies", async (req, res) => {
             post_id: r.post_id?._id,
             post_content: r.post_id?.content,
             post_username: r.post_id?.user_id?.username,
-            likes,
-            dislikes,
+            likes: counts.likes,
+            dislikes: counts.dislikes,
+            userLiked: userReactionMap[r._id.toString()] === 'like',
+            userDisliked: userReactionMap[r._id.toString()] === 'dislike',
         };
-    }));
+    });
 
     res.status(200).json(result);
 });

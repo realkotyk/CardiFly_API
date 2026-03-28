@@ -19,4 +19,9 @@ postSchema.set('toJSON', {
   },
 });
 
+// Indexes for query performance
+postSchema.index({ scheduled_at: 1 });
+postSchema.index({ community_id: 1, is_published: 1 });
+postSchema.index({ user_id: 1, is_published: 1, created_at: -1 });
+
 export default mongoose.model('Post', postSchema);

@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import jwt from 'jsonwebtoken';
 import multer from 'multer';
+import { optionalUserId, parsePagination } from '../helpers/utils.js';
 import sharp from 'sharp';
 import path from 'path';
 import fs from 'fs';
@@ -29,14 +29,6 @@ const router = Router();
 
 function slugify(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-}
-
-function optionalUserId(req) {
-  const header = req.headers.authorization;
-  if (header?.startsWith('Bearer ')) {
-    try { return jwt.verify(header.split(' ')[1], process.env.JWT_SECRET).userId; } catch {}
-  }
-  return null;
 }
 
 // POST /api/communities — create
@@ -77,9 +69,7 @@ router.post('/', auth, async (req, res) => {
 // GET /api/communities — list/search
 router.get('/', async (req, res) => {
   const q = (req.query.q || '').trim();
-  const limit = Math.min(parseInt(req.query.limit) || 20, 50);
-  const page = Math.max(parseInt(req.query.page) || 1, 1);
-  const offset = (page - 1) * limit;
+  const { page, limit, skip: offset } = parsePagination(req.query, { maxLimit: 50 });
 
   const filter = q ? { name: { $regex: q, $options: 'i' } } : {};
 
