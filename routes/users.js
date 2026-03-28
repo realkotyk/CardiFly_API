@@ -8,6 +8,8 @@ import Follow from "../models/Follow.js";
 import Reply from "../models/Reply.js";
 import Rechirp from "../models/Rechirp.js";
 import ReplyReaction from "../models/ReplyReaction.js";
+import CommunityMember from "../models/CommunityMember.js";
+import Community from "../models/Community.js";
 import Notification from "../models/Notification.js";
 import { auth } from "../middlewares/auth.js";
 import { attachExtras, attachUserState } from "../helpers/chirpHelpers.js";
@@ -67,7 +69,7 @@ router.get("/suggestions", async (req, res) => {
         },
         { $sort: { followers_count: -1, posts_count: -1 } },
         { $limit: 3 },
-        { $project: { id: 1, username: 1, bio: 1, avatar_url: 1, followers_count: 1, posts_count: 1, _id: 0 } },
+        { $project: { id: 1, username: 1, bio: 1, avatar_url: 1, followers_count: 1, posts_count: 1, account_type: { $ifNull: ['$account_type', 'standard'] }, _id: 0 } },
     ]);
 
     res.status(200).json(suggestions);
@@ -101,10 +103,13 @@ router.patch("/:id", auth, async (req, res) => {
     if (String(req.params.id) !== String(req.user.userId)) {
         return res.status(403).json({ error: "Not authorized." });
     }
-    const { avatar_url, bio } = req.body;
+    const { avatar_url, bio, display_name, country, city } = req.body;
     const updates = {};
     if (avatar_url !== undefined) updates.avatar_url = avatar_url;
     if (bio !== undefined) updates.bio = bio;
+    if (display_name !== undefined) updates.display_name = display_name;
+    if (country !== undefined) updates.country = country;
+    if (city !== undefined) updates.city = city;
     const user = await User.findByIdAndUpdate(req.params.id, updates, { new: true });
     res.status(200).json(user);
 });
@@ -143,7 +148,7 @@ router.get("/:id/posts", async (req, res) => {
     const userId = optionalUserId(req);
     const posts = await Post.find({ user_id: user._id, is_published: true })
         .sort({ created_at: -1 })
-        .populate('user_id', 'username avatar_url')
+        .populate('user_id', 'username avatar_url account_type')
         .lean();
 
     const chirps = posts.map(p => ({
@@ -155,6 +160,7 @@ router.get("/:id/posts", async (req, res) => {
         user_id: p.user_id._id,
         username: p.user_id.username,
         avatar_url: p.user_id.avatar_url,
+        account_type: p.user_id.account_type || 'standard',
     }));
 
     await attachExtras(chirps, userId);
@@ -173,7 +179,7 @@ router.get("/:id/likes", async (req, res) => {
     const reactions = await Reaction.find({ user_id: user._id, type: 'like' }).sort({ created_at: -1 });
     const postIds = reactions.map(r => r.post_id);
     const posts = await Post.find({ _id: { $in: postIds } })
-        .populate('user_id', 'username avatar_url')
+        .populate('user_id', 'username avatar_url account_type')
         .lean();
 
     const chirps = posts.map(p => ({
@@ -185,6 +191,7 @@ router.get("/:id/likes", async (req, res) => {
         user_id: p.user_id._id,
         username: p.user_id.username,
         avatar_url: p.user_id.avatar_url,
+        account_type: p.user_id.account_type || 'standard',
         userLiked: true,
         userDisliked: false,
     }));
@@ -203,7 +210,7 @@ router.get("/:id/replies", async (req, res) => {
 
     const replies = await Reply.find({ user_id: user._id })
         .sort({ created_at: -1 })
-        .populate('user_id', 'username avatar_url')
+        .populate('user_id', 'username avatar_url account_type')
         .populate({ path: 'post_id', populate: { path: 'user_id', select: 'username' } })
         .lean();
 
@@ -216,6 +223,7 @@ router.get("/:id/replies", async (req, res) => {
             created_at: r.created_at,
             username: r.user_id.username,
             avatar_url: r.user_id.avatar_url,
+            account_type: r.user_id.account_type || 'standard',
             post_id: r.post_id?._id,
             post_content: r.post_id?.content,
             post_username: r.post_id?.user_id?.username,
@@ -263,6 +271,34 @@ router.get("/:id/following", async (req, res) => {
         avatar_url: f.following_id.avatar_url,
     }));
     res.status(200).json(result);
+});
+
+// GET /api/users/:id/communities
+router.get("/:id/communities", async (req, res) => {
+    const query = mongoose.isValidObjectId(req.params.id)
+        ? { _id: req.params.id }
+        : { username: req.params.id };
+    const user = await User.findOne(query);
+    if (!user) return res.status(404).json({ error: "User not found." });
+
+    const memberships = await CommunityMember.find({ user_id: user._id, status: 'active' })
+        .populate({ path: 'community_id', populate: { path: 'owner_id', select: 'username avatar_url' } });
+
+    const communities = memberships.map(m => {
+        const c = m.community_id;
+        return {
+            id: c._id,
+            name: c.name,
+            slug: c.slug,
+            description: c.description,
+            type: c.type,
+            member_count: c.member_count,
+            role: m.role,
+            owner: { id: c.owner_id._id, username: c.owner_id.username, avatar_url: c.owner_id.avatar_url },
+        };
+    });
+
+    res.status(200).json(communities);
 });
 
 export default router;

@@ -62,7 +62,7 @@ router.get("/:tag", async (req, res) => {
             .sort({ created_at: -1 })
             .skip(offset)
             .limit(limit)
-            .populate('user_id', 'username avatar_url')
+            .populate('user_id', 'username avatar_url account_type')
             .lean(),
         Post.countDocuments(query),
     ]);
@@ -76,6 +76,7 @@ router.get("/:tag", async (req, res) => {
         user_id: p.user_id._id,
         username: p.user_id.username,
         avatar_url: p.user_id.avatar_url,
+        account_type: p.user_id.account_type || 'standard',
     }));
 
     await attachExtras(chirps, userId);

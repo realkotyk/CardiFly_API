@@ -17,6 +17,9 @@ import repliesRoute from "./routes/replies.js";
 import notificationsRoute from "./routes/notifications.js";
 import hashtagsRoute from "./routes/hashtags.js";
 import uploadRoute from "./routes/upload.js";
+import communitiesRoute from "./routes/communities.js";
+import subscriptionRoute from "./routes/subscription.js";
+import promotionsRoute from "./routes/promotions.js";
 import { startScheduler } from "./scheduler.js";
 
 const app = express();
@@ -73,6 +76,12 @@ app.use("/notifications", notificationsRoute);
 app.use("/hashtags", hashtagsRoute);
 app.use("/api/upload", uploadRoute);
 app.use("/upload", uploadRoute);
+app.use("/api/communities", postsLimiter, communitiesRoute);
+app.use("/communities", postsLimiter, communitiesRoute);
+app.use("/api/subscription", subscriptionRoute);
+app.use("/subscription", subscriptionRoute);
+app.use("/api/promotions", postsLimiter, promotionsRoute);
+app.use("/promotions", postsLimiter, promotionsRoute);
 
 // Global error handler
 app.use((err, req, res, _next) => {

@@ -210,5 +210,109 @@ dislike('GrumpyStack', 'CryptoSparrow');
 await Reaction.insertMany(reactions);
 console.log(`✓ Created ${reactions.length} reactions`);
 
+// ── Communities ──────────────────────────────────────────────────────────────
+import Community from './models/Community.js';
+import CommunityMember from './models/CommunityMember.js';
+
+await Community.deleteMany({});
+await CommunityMember.deleteMany({});
+
+const COMMUNITIES = [
+  {
+    name: 'Dev Talk',
+    slug: 'dev-talk',
+    description: 'General software development discussions. Share tips, ask questions, talk code.',
+    type: 'public',
+    owner: 'NightOwlDev',
+    members: ['CardinalMike', 'SwiftSarah', 'DuskCoder', 'ZenDevOps', 'PastaEngineer', 'TypoKing', 'Kot'],
+  },
+  {
+    name: 'Retro Tech Enthusiasts',
+    slug: 'retro-tech-enthusiasts',
+    description: 'For lovers of vintage hardware, old-school internet, and computing history.',
+    type: 'public',
+    owner: 'RetroRobin',
+    members: ['NightOwlDev', 'GrumpyStack', 'LunaWatcher', 'CardinalMike'],
+  },
+  {
+    name: 'Design Corner',
+    slug: 'design-corner',
+    description: 'UI/UX, CSS wizardry, and visual design. Share your work and get feedback.',
+    type: 'public',
+    owner: 'PixelPusher',
+    members: ['SwiftSarah', 'CardinalMike', 'MorningJay', 'Kot'],
+  },
+  {
+    name: 'Coffee & Code',
+    slug: 'coffee-and-code',
+    description: 'Late night coding sessions and morning brew discussions. ☕',
+    type: 'private',
+    owner: 'CardinalMike',
+    members: ['NightOwlDev', 'MorningJay', 'DuskCoder', 'SwiftSarah'],
+  },
+  {
+    name: 'Bird Watchers Club',
+    slug: 'bird-watchers-club',
+    description: 'Spot, share, and appreciate our feathered friends. 🐦',
+    type: 'public',
+    owner: 'CardinalMike',
+    members: ['LunaWatcher', 'QuietFinch', 'NewbieNest'],
+  },
+];
+
+for (const c of COMMUNITIES) {
+  const community = await Community.create({
+    name: c.name,
+    slug: c.slug,
+    description: c.description,
+    type: c.type,
+    owner_id: uid[c.owner],
+    member_count: 1 + c.members.length,
+  });
+
+  // Owner membership
+  await CommunityMember.create({
+    community_id: community._id,
+    user_id: uid[c.owner],
+    role: 'owner',
+    status: 'active',
+  });
+
+  // Member memberships
+  for (const member of c.members) {
+    await CommunityMember.create({
+      community_id: community._id,
+      user_id: uid[member],
+      role: 'member',
+      status: 'active',
+    });
+  }
+
+  // Add a few community posts
+  const communityPosts = [];
+  if (c.slug === 'dev-talk') {
+    communityPosts.push(
+      { user_id: uid['NightOwlDev'], content: 'Welcome to Dev Talk! Share your latest coding adventures here.', community_id: community._id },
+      { user_id: uid['SwiftSarah'], content: 'Anyone tried the new Swift concurrency features? Opinions?', community_id: community._id },
+      { user_id: uid['ZenDevOps'], content: 'Hot take: YAML is a programming language.', community_id: community._id },
+    );
+  } else if (c.slug === 'retro-tech-enthusiasts') {
+    communityPosts.push(
+      { user_id: uid['RetroRobin'], content: 'Just picked up a working Commodore 64 at a flea market. $15!', community_id: community._id },
+      { user_id: uid['GrumpyStack'], content: 'Remember when websites loaded in under a second?', community_id: community._id },
+    );
+  } else if (c.slug === 'design-corner') {
+    communityPosts.push(
+      { user_id: uid['PixelPusher'], content: 'New trend: everything is beige. Thoughts on the warm UI movement?', community_id: community._id },
+    );
+  }
+
+  if (communityPosts.length > 0) {
+    await Post.insertMany(communityPosts);
+  }
+}
+
+console.log(`✓ Created ${COMMUNITIES.length} communities with members and posts`);
+
 await mongoose.disconnect();
 console.log('\n🎉 Seed complete! All passwords: password123');

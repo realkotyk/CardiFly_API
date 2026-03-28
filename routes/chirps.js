@@ -13,6 +13,7 @@ import Notification from "../models/Notification.js";
 import Follow from "../models/Follow.js";
 import { auth } from "../middlewares/auth.js";
 import { attachExtras, attachUserState } from "../helpers/chirpHelpers.js";
+import { getPromotedChirps } from "./promotions.js";
 
 const router = Router();
 
@@ -55,7 +56,7 @@ async function postToChirp(post) {
     };
 }
 
-// GET / — paginated feed
+// GET / — paginated feed with promoted chirps interleaved
 router.get("/", async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
     const page = Math.max(parseInt(req.query.page) || 1, 1);
@@ -66,7 +67,7 @@ router.get("/", async (req, res) => {
         .sort({ created_at: -1 })
         .skip(offset)
         .limit(limit)
-        .populate('user_id', 'username avatar_url')
+        .populate('user_id', 'username avatar_url account_type')
         .lean();
 
     const chirps = posts.map(p => ({
@@ -78,12 +79,33 @@ router.get("/", async (req, res) => {
         user_id: p.user_id._id,
         username: p.user_id.username,
         avatar_url: p.user_id.avatar_url,
+        account_type: p.user_id.account_type || 'standard',
+        is_promoted: false,
     }));
 
     await attachExtras(chirps, userId);
     await attachUserState(chirps, userId);
 
-    res.status(200).json({ page, limit, chirps });
+    // Interleave promoted chirps every ~12 posts
+    const AD_INTERVAL = 12;
+    let promoted = [];
+    if (chirps.length >= AD_INTERVAL) {
+        const adsNeeded = Math.floor(chirps.length / AD_INTERVAL);
+        promoted = await getPromotedChirps(userId, adsNeeded);
+    }
+
+    // Insert promoted chirps into feed
+    const feed = [...chirps];
+    promoted.forEach((ad, i) => {
+        const insertAt = (i + 1) * AD_INTERVAL + i; // account for previously inserted ads
+        if (insertAt <= feed.length) {
+            feed.splice(insertAt, 0, ad);
+        } else {
+            feed.push(ad);
+        }
+    });
+
+    res.status(200).json({ page, limit, chirps: feed });
 });
 
 // GET /following
@@ -99,7 +121,7 @@ router.get("/following", auth, async (req, res) => {
         .sort({ created_at: -1 })
         .skip(offset)
         .limit(limit)
-        .populate('user_id', 'username avatar_url')
+        .populate('user_id', 'username avatar_url account_type')
         .lean();
 
     const chirps = posts.map(p => ({
@@ -111,6 +133,8 @@ router.get("/following", auth, async (req, res) => {
         user_id: p.user_id._id,
         username: p.user_id.username,
         avatar_url: p.user_id.avatar_url,
+        account_type: p.user_id.account_type || 'standard',
+        is_promoted: false,
     }));
 
     await attachExtras(chirps, req.user.userId);
@@ -125,7 +149,7 @@ router.get("/scheduled", auth, async (req, res) => {
         user_id: req.user.userId,
         is_published: false,
         scheduled_at: { $ne: null },
-    }).sort({ scheduled_at: 1 }).populate('user_id', 'username avatar_url').lean();
+    }).sort({ scheduled_at: 1 }).populate('user_id', 'username avatar_url account_type').lean();
 
     const chirps = posts.map(p => ({
         id: p._id,
@@ -136,6 +160,7 @@ router.get("/scheduled", auth, async (req, res) => {
         user_id: p.user_id._id,
         username: p.user_id.username,
         avatar_url: p.user_id.avatar_url,
+        account_type: p.user_id.account_type || 'standard',
     }));
 
     await attachExtras(chirps, req.user.userId);
@@ -144,7 +169,7 @@ router.get("/scheduled", auth, async (req, res) => {
 
 // GET /:id
 router.get("/:id", async (req, res) => {
-    const post = await Post.findById(req.params.id).populate('user_id', 'username avatar_url');
+    const post = await Post.findById(req.params.id).populate('user_id', 'username avatar_url account_type');
     if (!post) return res.status(404).json({ error: "Chirp not found." });
 
     const userId = optionalUserId(req);
@@ -159,6 +184,8 @@ router.get("/:id", async (req, res) => {
         user_id: post.user_id._id,
         username: post.user_id.username,
         avatar_url: post.user_id.avatar_url,
+        account_type: post.user_id.account_type || 'standard',
+        is_promoted: false,
     };
 
     const chirps = [chirp];
@@ -180,8 +207,12 @@ router.post("/", auth, async (req, res) => {
     if (!hasContent && !hasMedia && !hasPoll && !hasQuote) {
         return res.status(400).json({ error: "content, media, poll, gif, or quote is required." });
     }
-    if (content && content.length > 280) {
-        return res.status(400).json({ error: "content must be 280 characters or less." });
+
+    // VIP users get 1000 char limit, default users get 280
+    const user = await User.findById(req.user.userId);
+    const charLimit = user?.isVip() ? 1000 : 280;
+    if (content && content.length > charLimit) {
+        return res.status(400).json({ error: `content must be ${charLimit} characters or less.` });
     }
 
     const post = await Post.create({
@@ -216,7 +247,7 @@ router.post("/", auth, async (req, res) => {
     }
 
     // Re-fetch with user populated
-    const full = await Post.findById(post._id).populate('user_id', 'username avatar_url');
+    const full = await Post.findById(post._id).populate('user_id', 'username avatar_url account_type');
     const chirp = {
         id: full._id,
         content: full.content,
@@ -226,6 +257,7 @@ router.post("/", auth, async (req, res) => {
         user_id: full.user_id._id,
         username: full.user_id.username,
         avatar_url: full.user_id.avatar_url,
+        account_type: full.user_id.account_type || 'standard',
     };
     const result = [chirp];
     await attachExtras(result, req.user.userId);
@@ -245,13 +277,15 @@ router.patch("/:id", auth, async (req, res) => {
     if (!content || content.trim().length === 0) {
         return res.status(400).json({ error: "content is required." });
     }
-    if (content.length > 280) {
-        return res.status(400).json({ error: "content must be 280 characters or less." });
+    const editor = await User.findById(req.user.userId);
+    const editCharLimit = editor?.isVip() ? 1000 : 280;
+    if (content.length > editCharLimit) {
+        return res.status(400).json({ error: `content must be ${editCharLimit} characters or less.` });
     }
     post.content = content.trim();
     await post.save();
 
-    const full = await Post.findById(post._id).populate('user_id', 'username avatar_url');
+    const full = await Post.findById(post._id).populate('user_id', 'username avatar_url account_type');
     const chirp = {
         id: full._id,
         content: full.content,
@@ -260,6 +294,7 @@ router.patch("/:id", auth, async (req, res) => {
         user_id: full.user_id._id,
         username: full.user_id.username,
         avatar_url: full.user_id.avatar_url,
+        account_type: full.user_id.account_type || 'standard',
     };
     const result = [chirp];
     await attachExtras(result, req.user.userId);
@@ -335,7 +370,7 @@ router.post("/:id/reply", auth, async (req, res) => {
     }
 
     const reply = await Reply.create({ post_id: post._id, user_id: req.user.userId, content: content.trim() });
-    const populated = await Reply.findById(reply._id).populate('user_id', 'username avatar_url');
+    const populated = await Reply.findById(reply._id).populate('user_id', 'username avatar_url account_type');
 
     if (String(post.user_id) !== String(req.user.userId)) {
         await Notification.create({ recipient_id: post.user_id, actor_id: req.user.userId, type: 'reply', post_id: post._id });
@@ -348,6 +383,7 @@ router.post("/:id/reply", auth, async (req, res) => {
         created_at: populated.created_at,
         username: populated.user_id.username,
         avatar_url: populated.user_id.avatar_url,
+        account_type: populated.user_id.account_type || 'standard',
     });
 });
 
@@ -358,7 +394,7 @@ router.get("/:id/replies", async (req, res) => {
 
     const replies = await Reply.find({ post_id: post._id })
         .sort({ created_at: 1 })
-        .populate('user_id', 'username avatar_url')
+        .populate('user_id', 'username avatar_url account_type')
         .lean();
 
     const userId = optionalUserId(req);
@@ -392,6 +428,7 @@ router.get("/:id/replies", async (req, res) => {
         created_at: r.created_at,
         username: r.user_id.username,
         avatar_url: r.user_id.avatar_url,
+        account_type: r.user_id.account_type || 'standard',
         likes: likeMap[String(r._id)] || 0,
         dislikes: dislikeMap[String(r._id)] || 0,
         userLiked: userReactionMap[String(r._id)] === 'like',
