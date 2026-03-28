@@ -1,13 +1,11 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import User from "../models/user.js";
+import User from "../models/User.js";
 
 const router = Router();
 
-// @desc    Register a new user
-// @route   POST /api/auth/register
-// @access  Public
+// POST /api/auth/register
 router.post("/register", async (req, res) => {
     const { username, email, password } = req.body;
 
@@ -15,23 +13,21 @@ router.post("/register", async (req, res) => {
         return res.status(400).json({ error: "username, email and password are required." });
     }
 
-    if (User.findByEmail(email)) {
+    if (await User.findOne({ email })) {
         return res.status(409).json({ error: "Email already in use." });
     }
 
-    if (User.findByUsername(username)) {
+    if (await User.findOne({ username })) {
         return res.status(409).json({ error: "Username already taken." });
     }
 
     const password_hash = await bcrypt.hash(password, 10);
-    const user = User.create({ username, email, password_hash });
+    const user = await User.create({ username, email, password_hash });
 
     res.status(201).json(user);
 });
 
-// @desc    Login
-// @route   POST /api/auth/login
-// @access  Public
+// POST /api/auth/login
 router.post("/login", async (req, res) => {
     const { username, password } = req.body;
 
@@ -39,7 +35,7 @@ router.post("/login", async (req, res) => {
         return res.status(400).json({ error: "username and password are required." });
     }
 
-    const user = User.findByUsername(username);
+    const user = await User.findOne({ username }).select('+password_hash');
     if (!user) {
         return res.status(401).json({ error: "Invalid credentials." });
     }
@@ -50,7 +46,7 @@ router.post("/login", async (req, res) => {
     }
 
     const token = jwt.sign(
-        { userId: user.id, username: user.username },
+        { userId: user._id, username: user.username },
         process.env.JWT_SECRET,
         { algorithm: "HS256", expiresIn: "24h" }
     );

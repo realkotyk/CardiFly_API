@@ -1,211 +1,268 @@
 import { Router } from "express";
 import jwt from "jsonwebtoken";
-import User from "../models/user.js";
-import Chirp from "../models/chirp.js";
+import mongoose from "mongoose";
+import User from "../models/User.js";
+import Post from "../models/Post.js";
+import Reaction from "../models/Reaction.js";
+import Follow from "../models/Follow.js";
+import Reply from "../models/Reply.js";
+import Rechirp from "../models/Rechirp.js";
+import ReplyReaction from "../models/ReplyReaction.js";
+import Notification from "../models/Notification.js";
 import { auth } from "../middlewares/auth.js";
-import db from "../startup/db.js";
+import { attachExtras, attachUserState } from "../helpers/chirpHelpers.js";
 
 const router = Router();
 
-// @desc    Search users by username prefix (for @mention autocomplete)
-// @route   GET /api/users/search?q=partial
-// @access  Public
-router.get("/search", (req, res) => {
+function optionalUserId(req) {
+    const header = req.headers.authorization;
+    if (header?.startsWith("Bearer ")) {
+        try {
+            const decoded = jwt.verify(header.split(" ")[1], process.env.JWT_SECRET);
+            return decoded.userId;
+        } catch {}
+    }
+    return null;
+}
+
+// GET /api/users/search?q=partial
+router.get("/search", async (req, res) => {
     const q = (req.query.q || "").trim();
     if (!q) return res.status(200).json([]);
-    const users = db.prepare(`
-        SELECT id, username, avatar_url
-        FROM users
-        WHERE username LIKE ? COLLATE NOCASE
-        ORDER BY username ASC
-        LIMIT 10
-    `).all(`${q}%`);
+    const users = await User.find({
+        username: { $regex: `^${q}`, $options: 'i' },
+    }).select('username avatar_url').limit(10).sort('username');
     res.status(200).json(users);
 });
 
-// @desc    Get 3 most active users not yet followed by the requester
-// @route   GET /api/users/suggestions
-// @access  Public (auth optional)
-router.get("/suggestions", (req, res) => {
-    let currentUserId = null;
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith("Bearer ")) {
-        try {
-            const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
-            currentUserId = decoded.userId;
-        } catch {}
+// GET /api/users/suggestions
+router.get("/suggestions", async (req, res) => {
+    const currentUserId = optionalUserId(req);
+
+    const excludeIds = [];
+    if (currentUserId) {
+        excludeIds.push(new mongoose.Types.ObjectId(currentUserId));
+        const following = await Follow.find({ follower_id: currentUserId }).select('following_id');
+        following.forEach(f => excludeIds.push(f.following_id));
     }
 
-    const suggestions = db.prepare(`
-        SELECT u.id, u.username, u.bio, u.avatar_url,
-               (SELECT COUNT(*) FROM follows WHERE following_id = u.id) AS followers_count,
-               (SELECT COUNT(*) FROM posts WHERE user_id = u.id) AS posts_count
-        FROM users u
-        WHERE u.id != COALESCE(?, -1)
-          AND u.id NOT IN (
-              SELECT following_id FROM follows WHERE follower_id = COALESCE(?, -1)
-          )
-        ORDER BY (followers_count + posts_count) DESC
-        LIMIT 3
-    `).all(currentUserId, currentUserId);
+    const suggestions = await User.aggregate([
+        { $match: { _id: { $nin: excludeIds } } },
+        {
+            $lookup: {
+                from: 'follows', localField: '_id', foreignField: 'following_id', as: 'followerDocs',
+            },
+        },
+        {
+            $lookup: {
+                from: 'posts', localField: '_id', foreignField: 'user_id', as: 'postDocs',
+            },
+        },
+        {
+            $addFields: {
+                followers_count: { $size: '$followerDocs' },
+                posts_count: { $size: '$postDocs' },
+                id: '$_id',
+            },
+        },
+        { $sort: { followers_count: -1, posts_count: -1 } },
+        { $limit: 3 },
+        { $project: { id: 1, username: 1, bio: 1, avatar_url: 1, followers_count: 1, posts_count: 1, _id: 0 } },
+    ]);
 
     res.status(200).json(suggestions);
 });
 
-// @desc    Get user profile
-// @route   GET /api/users/:id
-// @access  Public
-router.get("/:id", (req, res) => {
-    const user = User.findByIdOrUsername(req.params.id);
+// GET /api/users/:id
+router.get("/:id", async (req, res) => {
+    const query = mongoose.isValidObjectId(req.params.id)
+        ? { _id: req.params.id }
+        : { username: req.params.id };
+    const user = await User.findOne(query);
     if (!user) return res.status(404).json({ error: "User not found." });
 
+    const [followersCount, followingCount, chirpCount] = await Promise.all([
+        Follow.countDocuments({ following_id: user._id }),
+        Follow.countDocuments({ follower_id: user._id }),
+        Post.countDocuments({ user_id: user._id, is_published: true }),
+    ]);
+
     let isFollowing = false;
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith("Bearer ")) {
-        try {
-            const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
-            isFollowing = User.isFollowing(decoded.userId, user.id);
-        } catch {}
+    const currentUserId = optionalUserId(req);
+    if (currentUserId) {
+        isFollowing = !!(await Follow.findOne({ follower_id: currentUserId, following_id: user._id }));
     }
 
-    res.status(200).json({ ...user, isFollowing });
+    res.status(200).json({ ...user.toJSON(), followersCount, followingCount, chirpCount, isFollowing });
 });
 
-// @desc    Update own profile (avatar_url, bio)
-// @route   PATCH /api/users/:id
-// @access  Private
-router.patch("/:id", auth, (req, res) => {
-    if (parseInt(req.params.id) !== req.user.userId) {
+// PATCH /api/users/:id
+router.patch("/:id", auth, async (req, res) => {
+    if (String(req.params.id) !== String(req.user.userId)) {
         return res.status(403).json({ error: "Not authorized." });
     }
-    const user = User.update(req.params.id, req.body);
+    const { avatar_url, bio } = req.body;
+    const updates = {};
+    if (avatar_url !== undefined) updates.avatar_url = avatar_url;
+    if (bio !== undefined) updates.bio = bio;
+    const user = await User.findByIdAndUpdate(req.params.id, updates, { new: true });
     res.status(200).json(user);
 });
 
-// @desc    Toggle follow/unfollow a user
-// @route   POST /api/users/:id/follow
-// @access  Private
-router.post("/:id/follow", auth, (req, res) => {
-    const target = User.findByIdOrUsername(req.params.id);
+// POST /api/users/:id/follow
+router.post("/:id/follow", auth, async (req, res) => {
+    const query = mongoose.isValidObjectId(req.params.id)
+        ? { _id: req.params.id }
+        : { username: req.params.id };
+    const target = await User.findOne(query);
     if (!target) return res.status(404).json({ error: "User not found." });
-    if (target.id === req.user.userId) {
+    if (String(target._id) === String(req.user.userId)) {
         return res.status(400).json({ error: "You cannot follow yourself." });
     }
-    const result = User.toggleFollow(req.user.userId, target.id);
-    if (result.isFollowing) {
-        db.prepare("INSERT INTO notifications (recipient_id, actor_id, type) VALUES (?, ?, 'follow')")
-            .run(target.id, req.user.userId);
+
+    const existing = await Follow.findOne({ follower_id: req.user.userId, following_id: target._id });
+    if (existing) {
+        await Follow.deleteOne({ _id: existing._id });
+    } else {
+        await Follow.create({ follower_id: req.user.userId, following_id: target._id });
+        await Notification.create({ recipient_id: target._id, actor_id: req.user.userId, type: 'follow' });
     }
+
+    const followersCount = await Follow.countDocuments({ following_id: target._id });
+    res.status(200).json({ isFollowing: !existing, followersCount });
+});
+
+// GET /api/users/:id/posts
+router.get("/:id/posts", async (req, res) => {
+    const query = mongoose.isValidObjectId(req.params.id)
+        ? { _id: req.params.id }
+        : { username: req.params.id };
+    const user = await User.findOne(query);
+    if (!user) return res.status(404).json({ error: "User not found." });
+
+    const userId = optionalUserId(req);
+    const posts = await Post.find({ user_id: user._id, is_published: true })
+        .sort({ created_at: -1 })
+        .populate('user_id', 'username avatar_url')
+        .lean();
+
+    const chirps = posts.map(p => ({
+        id: p._id,
+        content: p.content,
+        created_at: p.created_at,
+        location: p.location,
+        quoted_post_id: p.quoted_post_id,
+        user_id: p.user_id._id,
+        username: p.user_id.username,
+        avatar_url: p.user_id.avatar_url,
+    }));
+
+    await attachExtras(chirps, userId);
+    await attachUserState(chirps, userId);
+    res.status(200).json(chirps);
+});
+
+// GET /api/users/:id/likes
+router.get("/:id/likes", async (req, res) => {
+    const query = mongoose.isValidObjectId(req.params.id)
+        ? { _id: req.params.id }
+        : { username: req.params.id };
+    const user = await User.findOne(query);
+    if (!user) return res.status(404).json({ error: "User not found." });
+
+    const reactions = await Reaction.find({ user_id: user._id, type: 'like' }).sort({ created_at: -1 });
+    const postIds = reactions.map(r => r.post_id);
+    const posts = await Post.find({ _id: { $in: postIds } })
+        .populate('user_id', 'username avatar_url')
+        .lean();
+
+    const chirps = posts.map(p => ({
+        id: p._id,
+        content: p.content,
+        created_at: p.created_at,
+        location: p.location,
+        quoted_post_id: p.quoted_post_id,
+        user_id: p.user_id._id,
+        username: p.user_id.username,
+        avatar_url: p.user_id.avatar_url,
+        userLiked: true,
+        userDisliked: false,
+    }));
+
+    await attachExtras(chirps);
+    res.status(200).json(chirps);
+});
+
+// GET /api/users/:id/replies
+router.get("/:id/replies", async (req, res) => {
+    const query = mongoose.isValidObjectId(req.params.id)
+        ? { _id: req.params.id }
+        : { username: req.params.id };
+    const user = await User.findOne(query);
+    if (!user) return res.status(404).json({ error: "User not found." });
+
+    const replies = await Reply.find({ user_id: user._id })
+        .sort({ created_at: -1 })
+        .populate('user_id', 'username avatar_url')
+        .populate({ path: 'post_id', populate: { path: 'user_id', select: 'username' } })
+        .lean();
+
+    const result = await Promise.all(replies.map(async (r) => {
+        const likes = await ReplyReaction.countDocuments({ reply_id: r._id, type: 'like' });
+        const dislikes = await ReplyReaction.countDocuments({ reply_id: r._id, type: 'dislike' });
+        return {
+            id: r._id,
+            content: r.content,
+            created_at: r.created_at,
+            username: r.user_id.username,
+            avatar_url: r.user_id.avatar_url,
+            post_id: r.post_id?._id,
+            post_content: r.post_id?.content,
+            post_username: r.post_id?.user_id?.username,
+            likes,
+            dislikes,
+        };
+    }));
+
     res.status(200).json(result);
 });
 
-// @desc    Get all posts by a user with reaction counts
-// @route   GET /api/users/:id/posts
-// @access  Public
-router.get("/:id/posts", (req, res) => {
-    const user = User.findByIdOrUsername(req.params.id);
+// GET /api/users/:id/followers
+router.get("/:id/followers", async (req, res) => {
+    const query = mongoose.isValidObjectId(req.params.id)
+        ? { _id: req.params.id }
+        : { username: req.params.id };
+    const user = await User.findOne(query);
     if (!user) return res.status(404).json({ error: "User not found." });
 
-    let userId = null;
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith("Bearer ")) {
-        try {
-            const decoded = jwt.verify(authHeader.split(" ")[1], process.env.JWT_SECRET);
-            userId = decoded.userId;
-        } catch {}
-    }
-
-    const posts = Chirp.findByUserId(user.id);
-    posts.forEach(p => {
-        if (userId) {
-            const reaction = db.prepare(
-                "SELECT type FROM reactions WHERE post_id = ? AND user_id = ?"
-            ).get(p.id, userId);
-            p.userLiked = reaction?.type === "like";
-            p.userDisliked = reaction?.type === "dislike";
-            p.userRechirped = !!db.prepare(
-                "SELECT id FROM rechirps WHERE post_id = ? AND user_id = ?"
-            ).get(p.id, userId);
-            p.userReplied = !!db.prepare(
-                "SELECT id FROM replies WHERE post_id = ? AND user_id = ?"
-            ).get(p.id, userId);
-        } else {
-            p.userLiked = false;
-            p.userDisliked = false;
-            p.userRechirped = false;
-            p.userReplied = false;
-        }
-    });
-    res.status(200).json(posts);
+    const follows = await Follow.find({ following_id: user._id })
+        .sort({ created_at: -1 })
+        .populate('follower_id', 'username avatar_url');
+    const result = follows.map(f => ({
+        id: f.follower_id._id,
+        username: f.follower_id.username,
+        avatar_url: f.follower_id.avatar_url,
+    }));
+    res.status(200).json(result);
 });
 
-// @desc    Get posts liked by a user
-// @route   GET /api/users/:id/likes
-// @access  Public
-router.get("/:id/likes", (req, res) => {
-    const user = User.findByIdOrUsername(req.params.id);
+// GET /api/users/:id/following
+router.get("/:id/following", async (req, res) => {
+    const query = mongoose.isValidObjectId(req.params.id)
+        ? { _id: req.params.id }
+        : { username: req.params.id };
+    const user = await User.findOne(query);
     if (!user) return res.status(404).json({ error: "User not found." });
 
-    const liked = db.prepare(`
-        SELECT p.id, p.content, p.created_at,
-               u.id AS user_id, u.username, u.avatar_url,
-               (SELECT COUNT(*) FROM reactions WHERE post_id = p.id AND type = 'like') AS likes,
-               (SELECT COUNT(*) FROM reactions WHERE post_id = p.id AND type = 'dislike') AS dislikes,
-               (SELECT COUNT(*) FROM replies WHERE post_id = p.id) AS replies_count,
-               (SELECT COUNT(*) FROM rechirps WHERE post_id = p.id) AS rechirps_count,
-               1 AS userLiked, 0 AS userDisliked
-        FROM reactions r
-        JOIN posts p ON r.post_id = p.id
-        JOIN users u ON p.user_id = u.id
-        WHERE r.user_id = ? AND r.type = 'like'
-        ORDER BY r.created_at DESC
-    `).all(user.id);
-
-    res.status(200).json(liked);
-});
-
-// @desc    Get replies made by a user
-// @route   GET /api/users/:id/replies
-// @access  Public
-router.get("/:id/replies", (req, res) => {
-    const user = User.findByIdOrUsername(req.params.id);
-    if (!user) return res.status(404).json({ error: "User not found." });
-
-    const replies = db.prepare(`
-        SELECT
-            r.id, r.content, r.created_at,
-            u.username, u.avatar_url,
-            p.id AS post_id, p.content AS post_content,
-            pu.username AS post_username,
-            (SELECT COUNT(*) FROM reply_reactions WHERE reply_id = r.id AND type = 'like') AS likes,
-            (SELECT COUNT(*) FROM reply_reactions WHERE reply_id = r.id AND type = 'dislike') AS dislikes
-        FROM replies r
-        JOIN users u ON u.id = r.user_id
-        JOIN posts p ON p.id = r.post_id
-        JOIN users pu ON pu.id = p.user_id
-        WHERE r.user_id = ?
-        ORDER BY r.created_at DESC
-    `).all(user.id);
-
-    res.status(200).json(replies);
-});
-
-// @desc    List followers of a user
-// @route   GET /api/users/:id/followers
-// @access  Public
-router.get("/:id/followers", (req, res) => {
-    const user = User.findByIdOrUsername(req.params.id);
-    if (!user) return res.status(404).json({ error: "User not found." });
-    res.status(200).json(User.followers(user.id));
-});
-
-// @desc    List users a user is following
-// @route   GET /api/users/:id/following
-// @access  Public
-router.get("/:id/following", (req, res) => {
-    const user = User.findByIdOrUsername(req.params.id);
-    if (!user) return res.status(404).json({ error: "User not found." });
-    res.status(200).json(User.following(user.id));
+    const follows = await Follow.find({ follower_id: user._id })
+        .sort({ created_at: -1 })
+        .populate('following_id', 'username avatar_url');
+    const result = follows.map(f => ({
+        id: f.following_id._id,
+        username: f.following_id.username,
+        avatar_url: f.following_id.avatar_url,
+    }));
+    res.status(200).json(result);
 });
 
 export default router;

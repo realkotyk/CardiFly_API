@@ -1,54 +1,54 @@
 import { Router } from "express";
 import { auth } from "../middlewares/auth.js";
-import db from "../startup/db.js";
+import ReplyReaction from "../models/ReplyReaction.js";
 
 const router = Router();
 
-// @desc    Toggle like on a reply
-// @route   POST /replies/:id/like
-// @access  Private
-router.post("/:id/like", auth, (req, res) => {
-    const replyId = parseInt(req.params.id);
+// POST /replies/:id/like
+router.post("/:id/like", auth, async (req, res) => {
+    const replyId = req.params.id;
     const userId = req.user.userId;
 
-    const existing = db.prepare(
-        "SELECT * FROM reply_reactions WHERE reply_id = ? AND user_id = ?"
-    ).get(replyId, userId);
+    const existing = await ReplyReaction.findOne({ reply_id: replyId, user_id: userId });
 
     if (existing?.type === "like") {
-        db.prepare("DELETE FROM reply_reactions WHERE reply_id = ? AND user_id = ?")
-            .run(replyId, userId);
+        await ReplyReaction.deleteOne({ _id: existing._id });
+    } else if (existing) {
+        existing.type = "like";
+        await existing.save();
     } else {
-        db.prepare("INSERT OR REPLACE INTO reply_reactions (reply_id, user_id, type) VALUES (?,?,?)")
-            .run(replyId, userId, "like");
+        await ReplyReaction.create({ reply_id: replyId, user_id: userId, type: "like" });
     }
 
-    const likes = db.prepare("SELECT COUNT(*) as c FROM reply_reactions WHERE reply_id = ? AND type='like'").get(replyId).c;
-    const dislikes = db.prepare("SELECT COUNT(*) as c FROM reply_reactions WHERE reply_id = ? AND type='dislike'").get(replyId).c;
+    const [likes, dislikes] = await Promise.all([
+        ReplyReaction.countDocuments({ reply_id: replyId, type: 'like' }),
+        ReplyReaction.countDocuments({ reply_id: replyId, type: 'dislike' }),
+    ]);
+
     res.json({ likes, dislikes, userLiked: existing?.type !== "like", userDisliked: false });
 });
 
-// @desc    Toggle dislike on a reply
-// @route   POST /replies/:id/dislike
-// @access  Private
-router.post("/:id/dislike", auth, (req, res) => {
-    const replyId = parseInt(req.params.id);
+// POST /replies/:id/dislike
+router.post("/:id/dislike", auth, async (req, res) => {
+    const replyId = req.params.id;
     const userId = req.user.userId;
 
-    const existing = db.prepare(
-        "SELECT * FROM reply_reactions WHERE reply_id = ? AND user_id = ?"
-    ).get(replyId, userId);
+    const existing = await ReplyReaction.findOne({ reply_id: replyId, user_id: userId });
 
     if (existing?.type === "dislike") {
-        db.prepare("DELETE FROM reply_reactions WHERE reply_id = ? AND user_id = ?")
-            .run(replyId, userId);
+        await ReplyReaction.deleteOne({ _id: existing._id });
+    } else if (existing) {
+        existing.type = "dislike";
+        await existing.save();
     } else {
-        db.prepare("INSERT OR REPLACE INTO reply_reactions (reply_id, user_id, type) VALUES (?,?,?)")
-            .run(replyId, userId, "dislike");
+        await ReplyReaction.create({ reply_id: replyId, user_id: userId, type: "dislike" });
     }
 
-    const likes = db.prepare("SELECT COUNT(*) as c FROM reply_reactions WHERE reply_id = ? AND type='like'").get(replyId).c;
-    const dislikes = db.prepare("SELECT COUNT(*) as c FROM reply_reactions WHERE reply_id = ? AND type='dislike'").get(replyId).c;
+    const [likes, dislikes] = await Promise.all([
+        ReplyReaction.countDocuments({ reply_id: replyId, type: 'like' }),
+        ReplyReaction.countDocuments({ reply_id: replyId, type: 'dislike' }),
+    ]);
+
     res.json({ likes, dislikes, userLiked: false, userDisliked: existing?.type !== "dislike" });
 });
 

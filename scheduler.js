@@ -1,19 +1,18 @@
-import db from "./startup/db.js";
+import Post from './models/Post.js';
 
 export function startScheduler() {
-    setInterval(() => {
-        const now = new Date().toISOString();
-        const due = db.prepare(
-            "SELECT id FROM posts WHERE is_published = 0 AND scheduled_at <= ? AND scheduled_at IS NOT NULL"
-        ).all(now);
-
-        if (due.length > 0) {
-            const ids = due.map(r => r.id);
-            const placeholders = ids.map(() => '?').join(',');
-            db.prepare(
-                `UPDATE posts SET is_published = 1, created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id IN (${placeholders})`
-            ).run(...ids);
-            console.log(`Published ${ids.length} scheduled chirp(s)`);
+    setInterval(async () => {
+        try {
+            const now = new Date();
+            const result = await Post.updateMany(
+                { is_published: false, scheduled_at: { $lte: now, $ne: null } },
+                { is_published: true, created_at: now },
+            );
+            if (result.modifiedCount > 0) {
+                console.log(`Published ${result.modifiedCount} scheduled chirp(s)`);
+            }
+        } catch (err) {
+            console.error('Scheduler error:', err.message);
         }
     }, 60_000);
 }

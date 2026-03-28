@@ -1,38 +1,32 @@
 import { Router } from 'express';
 import { auth } from '../middlewares/auth.js';
-import db from '../startup/db.js';
+import Notification from '../models/Notification.js';
 
 const router = Router();
 
-// @desc    Get notifications for current user
-// @route   GET /notifications
-// @access  Private
-router.get('/', auth, (req, res) => {
-    const notifs = db.prepare(`
-        SELECT
-            n.id,
-            n.type,
-            n.read,
-            n.created_at,
-            u.username AS actor,
-            p.content   AS post_content
-        FROM notifications n
-        JOIN users u ON u.id = n.actor_id
-        LEFT JOIN posts p ON p.id = n.post_id
-        WHERE n.recipient_id = ?
-        ORDER BY n.created_at DESC
-        LIMIT 50
-    `).all(req.user.userId);
+// GET /notifications
+router.get('/', auth, async (req, res) => {
+    const notifs = await Notification.find({ recipient_id: req.user.userId })
+        .sort({ created_at: -1 })
+        .limit(50)
+        .populate('actor_id', 'username')
+        .populate('post_id', 'content');
 
-    res.status(200).json(notifs);
+    const result = notifs.map(n => ({
+        id: n._id,
+        type: n.type,
+        read: n.read,
+        created_at: n.created_at,
+        actor: n.actor_id?.username,
+        post_content: n.post_id?.content,
+    }));
+
+    res.status(200).json(result);
 });
 
-// @desc    Mark all notifications as read
-// @route   PATCH /notifications/read
-// @access  Private
-router.patch('/read', auth, (req, res) => {
-    db.prepare('UPDATE notifications SET read = 1 WHERE recipient_id = ?')
-        .run(req.user.userId);
+// PATCH /notifications/read
+router.patch('/read', auth, async (req, res) => {
+    await Notification.updateMany({ recipient_id: req.user.userId }, { read: true });
     res.status(200).json({ ok: true });
 });
 
